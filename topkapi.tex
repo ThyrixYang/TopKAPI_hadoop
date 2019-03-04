@@ -1,0 +1,213 @@
+\documentclass[a4paper,UTF8]{article}
+\usepackage{ctex}
+\usepackage[margin=1.25in]{geometry}
+\usepackage{color}
+\usepackage{graphicx}
+\usepackage{amssymb}
+\usepackage{amsmath}
+\usepackage{CJKutf8}
+\usepackage{amsthm}
+\usepackage{enumerate}
+\usepackage{bm}
+\usepackage{hyperref}
+\usepackage{epsfig}
+\usepackage{color}
+\usepackage{mdframed}
+\usepackage{lipsum}
+\usepackage{mathtools}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{authblk}
+\usepackage[linesnumbered,ruled]{algorithm2e}
+\usepackage[noend]{algpseudocode}
+\usepackage{listings}
+\newmdtheoremenv{thm-box}{myThm}
+\newmdtheoremenv{prop-box}{Proposition}
+\newmdtheoremenv{def-box}{定义}
+
+\usepackage{listings}
+\usepackage{xcolor}
+\lstset{
+    numbers=left, 
+    numberstyle= \tiny, 
+    keywordstyle= \color{ blue!70},
+    commentstyle= \color{red!50!green!50!blue!50}, 
+    frame=shadowbox, % 阴影效果
+    rulesepcolor= \color{ red!20!green!20!blue!20} ,
+    escapeinside=``, % 英文分号中可写入中文
+    xleftmargin=2em,xrightmargin=2em, aboveskip=1em,
+    framexleftmargin=2em
+} 
+
+\usepackage{booktabs}
+
+\setlength{\evensidemargin}{.25in}
+\setlength{\textwidth}{6in}
+\setlength{\topmargin}{-0.5in}
+\setlength{\topmargin}{-0.5in}
+% \setlength{\textheight}{9.5in}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\numberwithin{equation}{section}
+%\usepackage[thmmarks, amsmath, thref]{ntheorem}
+\newtheorem{theorem}{Theorem}
+\newtheorem*{definition}{Definition}
+\newtheorem*{solution}{Solution}
+\newtheorem*{prove}{Proof}
+\newcommand{\indep}{\rotatebox[origin=c]{90}{$\models$}}
+
+\usepackage{multirow}
+
+%--
+
+%--
+\begin{document}
+\title{大数据数据中获得近似top-k高频元素的\\
+高效并行算法MapReduce实现}
+\author[1]{周大蔚MG1833093}
+\author[1]{陆苏MG1833053}
+\author[1]{李新春MG1833043}
+\author[1]{杨嘉祺MF1833086}
+\affil[1]{\href{http://lamda.nju.edu.cn/CH.MainPage.ashx}{LAMDA Group}}
+\affil[ ]{导师：詹德川}
+\affil[ ]{研究方向：度量学习，多模态学习等}
+\affil[ ]{email: \textit {\{zhoudw,lus,lixc,yangjq\}@lamda.nju.edu.cn}}
+\date{}
+
+\maketitle
+
+\begin{abstract} 
+摘要
+\end{abstract}
+
+\section{背景}
+
+当前大数据时代面临的问题除了数据规模以外，流式数据对于数据存储和处理有着新的要求．流式数据是指由数据源不断生成的数据，这样的数据需要在不能同时保存所有数据的情况下进行分析．而高频元素的识别是流式数据挖掘中的重要内容之一．最直接的方法是将所有出现过的元素进行计数，然后将计数结果进行排序，这样可以获得精确的高频元素和其数目．但是这个简单的方法需要进行复杂度为$O(nlogn)$的排序，其中n是数据集中所有元素的数目，其空间复杂度也高达$O(n)$，这样的空间复杂度无法充分利用流式数据的特点．当在大规模并行的情况下实现这个算法时，由于信息交换而产生的巨大开销使得问题更加严重，难以提高算法的效率．
+
+由于精确算法的局限性，往往会为了提高效率选择舍弃一定的精度．由于频率在大部分应用中服从指数定律，或称28定律，即少部分内容往往占据了大部分篇幅，所以近似的计数往往是适用的．因此近似计数也成为了一个活跃和广泛的研究领域，产生了一系列能够以指数级存储效率提升的近似算法．其中一些已经在实际中得到了应用，例如基于哈希的CMS方法和基于字典的FA方法．
+
+\section{主要技术难点和解决办法}
+
+\subsection{top-k频繁元素挖掘}
+
+在数据中往往需要识别出经常出现的元素，如文本中最常出现的名词很可能与文章的主题有关．如果把文本看成$N$个词汇的集合，我们的目标就是找出其中出现次数最高的k个词汇．而在受到存储空间，运算速度等因素制约时，精确算法，考虑采用近似算法．近似top-k是指，对于给定的数据集$D, |D|=N$，返回一个top-k集合$H$，如果一个词$w$的出现次数$f >\phi \times N$，那么它以大概率($p \ge 1 - \delta$)，出现在集合中．而所有出现在集合中的词保证其出现次数$f > (\phi - \epsilon)N$．这个定义是从高频项的占比出发的，与top-k略有区别，是为了便于近似算法的分析．
+
+\subsection{现有近似算法的局限性}
+
+Frequent Algorithm(FA) 需要保存$(1/\phi)$个计数器来确定所有满足$f >\phi \times N$的词．对于流式数据，每个新来的词将与现有的计数器比对，如果这个词在计数器里，那么该计数器的数值增加１；如果还有没使用的计数器，把该计数器分配给这个词，计数为１；否则所有现有计数器的值减１．如果将计数器的数目设定为$(1/\epsilon)$，则FA算法就可以解决近似top-k问题．该算法是确定性算法，并且复杂度已经达到了理论最优．但是该算法在每个词到来时有可能需要对所有计数器减１，这个复杂度是$O(1/\epsilon)$的;同时为了保存这个元素到计数器的精确映射和查询，会增加一些额外开销．这限制了FA算法的时间效率．
+
+Count-Min Sketch(CMS)算法是基于Bloom Filter的数据结构．它使用一个二维矩阵$M$存储$l\times b$个计数器．使用$l$个两两独立的哈希函数$h_1, h_2,...,h_l$，将单词映射到$\{1, 2, ... b\}$上．然后对于每个到来的词$w$，将$h_i(w)$加１，这样多个计数器的计数结果将会成为该词出现次数的一个上界．通过利用哈希函数的两两独立性可以证明使用$l=O(log\frac{1}{\delta}), b=O(\frac{1}{\epsilon})$，可以解决近似top-k问题．CMS主要有两点不足，首先是因为哈希函数损失了词的内容，所以为了输出结果，需要同时维护一个堆，这增加了时间开销．其次CMS的数据结构无法实现reduce操作，因为两部分数据的CMS表无法进行直接的聚合，这使得CMS无法并行化．
+
+\subsection{高效并行算法Topkapi}
+
+topkapi算法设计的核心思想就是结合FA和CMS两种算法的优点，在保证可并行的前提下，提高时间和空间效率．
+
+在CMS的基础上，为每个哈希地址增加一个词信息$LHH_{ij}$和相应的计数器$LHHcount_{ij}$，当哈希到这个地址时，采用FA的更新策略，此时更新是$O(1)$的．该数据结构使用CMS作为计数估计，而FA结构用于词信息记录，可以保证在合并CMS表时仍然满足高频项的可查找性和计数的近似度，同时合并后的CMS表大小不变，CMS表的大小是$O(\frac{1}{\epsilon}log\frac{2}{\delta})$的，能够有效地降低通信和存储开销．
+
+将CMS和FA结合后，可以保证reducable的特性：１）对于每一部分数据，其CMS表的形式和大小是相同的２）将两个CMS表合并后，其合并结果和合并前的CMS表具有相同的大小和形式．
+
+Reducable的特性和mapreduce计算模型是高度契合的，符合将数据分块处理(map)再将结果进行合并(reduce)的设计思路，所以使用mapreduce实现该算法是很自然的．
+
+Topkapi的论文中是采用openMPI和openMP来实现的，在课程中我们学到mapreduce模型相对于这二者的诸多优越性．在mapreduce模型中实现该算法并对性能进行实验对于该算法的实用化有着重要意义．
+
+\subsection{基于Mapreduce的算法实现}
+
+
+\section{实验}
+
+由于寒假期间无法连接到课程的hadoop集群，并且大规模的基准测试数据集如\href{https://engineering.purdue.edu/~puma/datasets.htm}{PUMA}由于国内的网络问题难以获得，本课设中的实验大部分采用人工生成文本数据，并在单机hadoop系统上运行和比较．由于mapreduce框架具有良好的扩展能力，可以期望在集群中可以达到类似单机多核的并行效率．
+
+实验主要包括算法的正确性验证，以及性能比较．
+
+\section{总结}
+
+目前在google搜索没有见到在Hadoop-MapReduce框架中实现近似top-k元素挖掘的开源项目或代码库
+
+...
+
+\section{实验内容}
+由于可并行的特性，在数据足够多且处理器足够多的情况下本算法必然可以优于串行算法，但是因为条件所限，实验在单机(4核8线程)条件下进行，故无法体现出与串行算法相比的优势，实验数据中不涉及与串行算法的比较(已经实现了c++的串行版本topkapi算法和FA算法)．实验分为两部分，第一部分为与精确计数算法(wordcount)的mapreduce实现的性能比较，第二部分为探究算法参数CMS\_l和CMS\_b对于近似精确度的影响，证实算法的使用价值．
+数据生成采用Zipf法则生成对应数量的单词并随机打乱，Zipf法则参考：
+https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4176592/
+
+实验数据：
+\Comment{
+1e8即1e8个单词，大致为330M,1e9大致为3.9G．时间单位为秒．
+wordcount time:
+1e8: 101.4
+2e8: 186.9
+4e8: 363.4
+6e8: 582.9
+8e8: 792.2
+1e9: 1010.3
+
+topkapi time:
+1e8: 38.5
+2e8: 52.3
+4e8: 100.4
+6e8: 137.9
+8e8: 178.2
+1e9: 216.5
+
+以下均使用8e8数据，精确度为topk=100, 300, 1000的recall
+accuracy(recall) test:
+CMS_l = 4, CMS_b = 1024
+100: 0.950, 300: 0.863, 1000: 0.791
+time: 178.2
+
+CMS_l = 8, CMS_b = 1024
+100: 0.990, 300: 0.933, 1000: 0.795
+time: 241.5
+
+CMS_l = 4, CMS_b = 2048
+100: 0.970, 300: 0.937, 1000: 0.806
+time: 186.1
+
+CMS_l = 8, CMS_b = 2048
+100: 0.990, 300: 0.950, 0.834
+time: 265.7
+
+CMS_l = 16, CMS_b = 4096
+100: 1.000, 300: 0.983, 1000: 0.958
+time: 458.7
+}
+
+
+改进点１：实现根据近似程度选择参数的功能
+改进点２：论文中提到可以同时利用LHHCount和CMSCount提高计数的精确度，本实现只使用了CMSCount进行计数估计，是上界
+改进点３：论文中提到了可以只使用一部分LHHString的单词计算topk，可以提高reduce的效率．
+
+\section{小组分工和时间计划}
+
+\subsection{小组分工}
+
+\begin{itemize}
+主要任务
+数据生成和预处理，统筹安排
+性能优化，对比实验，实验设计
+算法实现hadoop
+算法实现c++
+实现了FA(c++), topkapi(c++), topkapi(mapreduce), Zipf数据生成(c++), 辅助脚本(py, bash)
+课程设计选题和可行性分析，mapreduce算法设计，实验报告撰写
+
+\item 陆苏：
+\item 李新春：
+\item 周大蔚：
+\item 杨嘉祺：
+\end{itemize}
+
+\subsection{时间计划}
+
+\begin{enumerate}
+\item 当前至2018年一月初：完成相关文献的调研，基础知识储备．
+\item 一月初至二月中旬：数据收集，小样本上进行试验．
+\item 一月中旬至二月初：完成代码和试验．
+\item 二月初至二月中旬：试验结果整理和报告撰写．
+\end{enumerate}
+
+
+\nocite{*}
+\bibliographystyle{unsrt}
+\bibliography{topkapi}
+
+\end{document}
